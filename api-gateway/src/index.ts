@@ -8,6 +8,7 @@ import { createClient } from '@supabase/supabase-js';
 // Import routes
 import authRoutes from './routes/auth';
 import calculationsRoutes from './routes/calculations';
+import emissionsFactorsRoutes from './routes/emissions-factors';
 
 // Load environment variables
 dotenv.config();
@@ -90,6 +91,7 @@ app.get('/health', async (req, res) => {
 // API routes
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/calculations', calculationsRoutes);
+app.use('/api/v1/emissions-factors', emissionsFactorsRoutes);
 
 // API documentation endpoint
 app.get('/api/v1', (req, res) => {
@@ -100,6 +102,7 @@ app.get('/api/v1', (req, res) => {
     documentation: {
       authentication: '/api/v1/auth',
       calculations: '/api/v1/calculations',
+      emissionsFactors: '/api/v1/emissions-factors',
       health: '/health'
     },
     endpoints: {
@@ -118,6 +121,12 @@ app.get('/api/v1', (req, res) => {
         calculate: 'POST /api/v1/calculations/calculate',
         batch: 'POST /api/v1/calculations/batch',
         history: 'GET /api/v1/calculations/history'
+      },
+      emissionsFactors: {
+        list: 'GET /api/v1/emissions-factors',
+        get: 'GET /api/v1/emissions-factors/{id}',
+        search: 'GET /api/v1/emissions-factors/search?q={keyword}',
+        transportModes: 'GET /api/v1/emissions-factors/transport-modes'
       }
     },
     glecFramework: {
@@ -129,7 +138,8 @@ app.get('/api/v1', (req, res) => {
         'Load factor optimization',
         'Emission intensity calculation',
         'Batch processing',
-        'Historical tracking'
+        'Historical tracking',
+        'Emissions factors database'
       ]
     },
     authentication: {
@@ -151,7 +161,10 @@ app.use('*', (req, res) => {
       'POST /api/v1/auth/register',
       'POST /api/v1/auth/login',
       'POST /api/v1/calculations/calculate',
-      'POST /api/v1/calculations/batch'
+      'POST /api/v1/calculations/batch',
+      'GET /api/v1/emissions-factors',
+      'GET /api/v1/emissions-factors/transport-modes',
+      'GET /api/v1/emissions-factors/search?q={keyword}'
     ]
   });
 });
@@ -202,6 +215,7 @@ const server = app.listen(PORT, () => {
   console.log(`🏥 Health Check: http://localhost:${PORT}/health`);
   console.log(`🔒 Authentication: http://localhost:${PORT}/api/v1/auth`);
   console.log(`🧮 Calculations: http://localhost:${PORT}/api/v1/calculations`);
+  console.log(`🏭 Emissions Factors: http://localhost:${PORT}/api/v1/emissions-factors`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`⚡ GLEC Framework v3.1 Ready!`);
 });

@@ -7,6 +7,7 @@ import { createClient } from '@supabase/supabase-js';
 
 // Import routes
 import authRoutes from './routes/auth';
+import calculationsRoutes from './routes/calculations';
 
 // Load environment variables
 dotenv.config();
@@ -88,6 +89,7 @@ app.get('/health', async (req, res) => {
 
 // API routes
 app.use('/api/v1/auth', authRoutes);
+app.use('/api/v1/calculations', calculationsRoutes);
 
 // API documentation endpoint
 app.get('/api/v1', (req, res) => {
@@ -97,6 +99,7 @@ app.get('/api/v1', (req, res) => {
     description: 'GLEC Framework B2B SaaS API Platform',
     documentation: {
       authentication: '/api/v1/auth',
+      calculations: '/api/v1/calculations',
       health: '/health'
     },
     endpoints: {
@@ -110,11 +113,29 @@ app.get('/api/v1', (req, res) => {
           create: 'POST /api/v1/auth/api-keys',
           list: 'GET /api/v1/auth/api-keys'
         }
+      },
+      calculations: {
+        calculate: 'POST /api/v1/calculations/calculate',
+        batch: 'POST /api/v1/calculations/batch',
+        history: 'GET /api/v1/calculations/history'
       }
     },
     glecFramework: {
       version: '3.1',
-      supportedModes: ['road', 'rail', 'sea', 'air']
+      supportedModes: ['road', 'rail', 'sea', 'air'],
+      features: [
+        'Well-to-Wheel (WTW) emissions',
+        'Multiple transport modes',
+        'Load factor optimization',
+        'Emission intensity calculation',
+        'Batch processing',
+        'Historical tracking'
+      ]
+    },
+    authentication: {
+      methods: ['JWT Bearer Token', 'API Key'],
+      apiKeyHeader: 'X-API-Key',
+      apiKeyFormat: 'glec_[64-character-hex]'
     }
   });
 });
@@ -128,7 +149,9 @@ app.use('*', (req, res) => {
       'GET /health',
       'GET /api/v1',
       'POST /api/v1/auth/register',
-      'POST /api/v1/auth/login'
+      'POST /api/v1/auth/login',
+      'POST /api/v1/calculations/calculate',
+      'POST /api/v1/calculations/batch'
     ]
   });
 });
@@ -178,7 +201,9 @@ const server = app.listen(PORT, () => {
   console.log(`📚 API Documentation: http://localhost:${PORT}/api/v1`);
   console.log(`🏥 Health Check: http://localhost:${PORT}/health`);
   console.log(`🔒 Authentication: http://localhost:${PORT}/api/v1/auth`);
+  console.log(`🧮 Calculations: http://localhost:${PORT}/api/v1/calculations`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`⚡ GLEC Framework v3.1 Ready!`);
 });
 
 // Export for testing

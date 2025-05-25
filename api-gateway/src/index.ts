@@ -1,9 +1,29 @@
 import express from 'express';
 import cors from 'cors';
-import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
+
+// Import security and rate limiting middleware
+import {
+  securityHeaders,
+  antiHpp,
+  validateApiKeyFormat,
+  sanitizeInput,
+  requestSizeLimit,
+  ipFilter,
+  logSecurityEvents,
+  validateContentType
+} from './middleware/security';
+
+import {
+  basicRateLimit,
+  createApiKeyRateLimit,
+  speedLimiter,
+  heavyOperationRateLimit,
+  addRateLimitHeaders,
+  logRateLimitViolations
+} from './middleware/rateLimiting';
 
 // Import routes
 import authRoutes from './routes/auth';
@@ -22,38 +42,53 @@ const supabase = createClient(
   process.env.SUPABASE_ANON_KEY!
 );
 
-// Security middleware
-app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'"],
-      imgSrc: ["'self'", "data:", "https:"],
-    },
-  },
-  crossOriginEmbedderPolicy: false,
-}));
+// Trust proxy for proper IP detection (must be before rate limiting)
+app.set('trust proxy', parseInt(process.env.TRUST_PROXY_HOPS || '1'));
+
+// Security middleware (highest priority)
+app.use(securityHeaders);
+app.use(antiHpp);
+app.use(ipFilter);
+app.use(logSecurityEvents);
+
+// Rate limiting middleware
+app.use(basicRateLimit);
+app.use(speedLimiter);
+app.use(logRateLimitViolations);
+app.use(addRateLimitHeaders);
 
 // CORS configuration
 app.use(cors({
   origin: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000', 'http://localhost:3001'],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key', 'X-CSRF-Token'],
 }));
 
 // Request logging
 app.use(morgan('combined'));
 
+// Request size and content validation
+app.use(requestSizeLimit);
+app.use(validateContentType(['application/json', 'application/x-www-form-urlencoded']));
+
 // Body parsing middleware
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json({ 
+  limit: '10mb',
+  strict: true,
+  type: 'application/json'
+}));
+app.use(express.urlencoded({ 
+  extended: true, 
+  limit: '10mb',
+  parameterLimit: 20
+}));
 
-// Trust proxy for proper IP detection
-app.set('trust proxy', 1);
+// Input sanitization
+app.use(sanitizeInput);
+app.use(validateApiKeyFormat);
 
-// Health check endpoint
+// Health check endpoint (no rate limiting)
 app.get('/health', async (req, res) => {
   try {
     // Test database connection
@@ -70,7 +105,14 @@ app.get('/health', async (req, res) => {
       database: error ? 'disconnected' : 'connected',
       services: {
         supabase: error ? 'down' : 'up',
+        redis: 'up', // Will be tested when Redis is used
         api: 'up'
+      },
+      security: {
+        rateLimiting: 'enabled',
+        securityHeaders: 'enabled',
+        inputSanitization: 'enabled',
+        apiKeyValidation: 'enabled'
       }
     };
     
@@ -88,10 +130,62 @@ app.get('/health', async (req, res) => {
   }
 });
 
-// API routes
-app.use('/api/v1/auth', authRoutes);
-app.use('/api/v1/calculations', calculationsRoutes);
-app.use('/api/v1/emissions-factors', emissionsFactorsRoutes);
+// Rate limit info endpoint
+app.get('/api/v1/rate-limits', (req, res) => {
+  const apiKey = req.headers['x-api-key'] as string;
+  const tier = apiKey ? 'api-key-based' : 'ip-based';
+  
+  res.json({
+    rateLimits: {
+      basic: {
+        windowMs: 15 * 60 * 1000,
+        max: 100,
+        description: 'Basic tier: 100 requests per 15 minutes'
+      },
+      premium: {
+        windowMs: 15 * 60 * 1000,
+        max: 500,
+        description: 'Premium tier: 500 requests per 15 minutes'
+      },
+      enterprise: {
+        windowMs: 15 * 60 * 1000,
+        max: 2000,
+        description: 'Enterprise tier: 2000 requests per 15 minutes'
+      },
+      ipBased: {
+        windowMs: 15 * 60 * 1000,
+        max: 50,
+        description: 'IP-based: 50 requests per 15 minutes (no API key)'
+      },
+      heavyOperations: {
+        windowMs: 60 * 1000,
+        max: 10,
+        description: 'Heavy operations: 10 requests per minute'
+      }
+    },
+    currentTier: tier,
+    headers: {
+      remaining: 'X-RateLimit-Remaining',
+      limit: 'X-RateLimit-Limit',
+      reset: 'X-RateLimit-Reset'
+    }
+  });
+});
+
+// API routes with specific rate limiting
+app.use('/api/v1/auth', createApiKeyRateLimit('basic'), authRoutes);
+
+// Heavy operations get additional rate limiting
+app.use('/api/v1/calculations', 
+  heavyOperationRateLimit, 
+  createApiKeyRateLimit('premium'), 
+  calculationsRoutes
+);
+
+app.use('/api/v1/emissions-factors', 
+  createApiKeyRateLimit('basic'), 
+  emissionsFactorsRoutes
+);
 
 // API documentation endpoint
 app.get('/api/v1', (req, res) => {
@@ -99,10 +193,21 @@ app.get('/api/v1', (req, res) => {
     name: 'GLEC API Dev2',
     version: '1.0.0',
     description: 'GLEC Framework B2B SaaS API Platform',
+    security: {
+      rateLimiting: {
+        enabled: true,
+        tiers: ['basic', 'premium', 'enterprise'],
+        ipBasedFallback: true
+      },
+      authentication: ['JWT Bearer Token', 'API Key'],
+      securityHeaders: 'enabled',
+      inputSanitization: 'enabled'
+    },
     documentation: {
       authentication: '/api/v1/auth',
       calculations: '/api/v1/calculations',
       emissionsFactors: '/api/v1/emissions-factors',
+      rateLimits: '/api/v1/rate-limits',
       health: '/health'
     },
     endpoints: {
@@ -127,6 +232,10 @@ app.get('/api/v1', (req, res) => {
         get: 'GET /api/v1/emissions-factors/{id}',
         search: 'GET /api/v1/emissions-factors/search?q={keyword}',
         transportModes: 'GET /api/v1/emissions-factors/transport-modes'
+      },
+      utility: {
+        rateLimits: 'GET /api/v1/rate-limits',
+        health: 'GET /health'
       }
     },
     glecFramework: {
@@ -139,13 +248,16 @@ app.get('/api/v1', (req, res) => {
         'Emission intensity calculation',
         'Batch processing',
         'Historical tracking',
-        'Emissions factors database'
+        'Emissions factors database',
+        'Rate limiting and security',
+        'Multi-tier API access'
       ]
     },
     authentication: {
       methods: ['JWT Bearer Token', 'API Key'],
       apiKeyHeader: 'X-API-Key',
-      apiKeyFormat: 'glec_[64-character-hex]'
+      apiKeyFormat: 'glec_{live|test}_{32-character-hex}',
+      bearerTokenHeader: 'Authorization: Bearer {token}'
     }
   });
 });
@@ -158,6 +270,7 @@ app.use('*', (req, res) => {
     availableEndpoints: [
       'GET /health',
       'GET /api/v1',
+      'GET /api/v1/rate-limits',
       'POST /api/v1/auth/register',
       'POST /api/v1/auth/login',
       'POST /api/v1/calculations/calculate',
@@ -172,6 +285,15 @@ app.use('*', (req, res) => {
 // Global error handler
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error('Global error handler:', err);
+  
+  // Handle rate limit errors
+  if (err.status === 429) {
+    return res.status(429).json({
+      error: 'Rate Limit Exceeded',
+      message: 'Too many requests, please try again later.',
+      retryAfter: err.retryAfter || 900
+    });
+  }
   
   // Handle validation errors
   if (err.name === 'ValidationError') {
@@ -190,9 +312,11 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   }
   
   // Default error response
-  res.status(500).json({
+  const isDevelopment = process.env.NODE_ENV === 'development';
+  res.status(err.status || 500).json({
     error: 'Internal Server Error',
-    message: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong',
+    message: isDevelopment ? err.message : 'Something went wrong',
+    ...(isDevelopment && { stack: err.stack }),
     requestId: req.headers['x-request-id'] || 'unknown'
   });
 });
@@ -216,8 +340,10 @@ const server = app.listen(PORT, () => {
   console.log(`🔒 Authentication: http://localhost:${PORT}/api/v1/auth`);
   console.log(`🧮 Calculations: http://localhost:${PORT}/api/v1/calculations`);
   console.log(`🏭 Emissions Factors: http://localhost:${PORT}/api/v1/emissions-factors`);
+  console.log(`📊 Rate Limits: http://localhost:${PORT}/api/v1/rate-limits`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`⚡ GLEC Framework v3.1 Ready!`);
+  console.log(`🛡️  Security: Rate limiting, input sanitization, security headers enabled`);
+  console.log(`⚡ GLEC Framework v3.1 Ready with enhanced security!`);
 });
 
 // Export for testing

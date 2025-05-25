@@ -1,0 +1,23 @@
+{
+  "name": "glec-api-dev2",
+  "version": "1.0.0",
+  "description": "GLEC Framework B2B SaaS API Platform",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:gateway\" \"npm run dev:frontend\"",
+    "dev:gateway": "cd api-gateway && npm run dev",
+    "dev:frontend": "cd frontend/dashboard && npm run dev",
+    "build": "npm run build:gateway && npm run build:frontend",
+    "build:gateway": "cd api-gateway && npm run build",
+    "build:frontend": "cd frontend/dashboard && npm run build",
+    "test": "npm run test:gateway",
+    "test:gateway": "cd api-gateway && npm test",
+    "install:all": "npm install && cd api-gateway && npm install && cd ../frontend/dashboard && npm install"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "workspaces": [
+    "api-gateway",
+    "frontend/dashboard"
+  ]
+}
